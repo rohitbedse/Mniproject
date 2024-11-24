@@ -32,11 +32,23 @@ def get_text_chunks(text):
     return text_splitter.split_text(text)
 
 
-# Generate a FAISS vector store from text chunks
+# Save FAISS vector store from text chunks
 def get_vector_store(text_chunks):
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
     vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
-    vector_store.save_local("faiss_index")
+    vector_store.save_local("faiss_index")  # Saves index.pkl and related files
+    return vector_store
+
+
+# Load FAISS vector store
+def load_vector_store():
+    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+    try:
+        # Load the FAISS index
+        vector_store = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
+        return vector_store
+    except FileNotFoundError:
+        return None
 
 
 # Create a conversational QA chain
@@ -56,12 +68,17 @@ def get_conversational_chain():
 
 # Handle user input and generate response
 def handle_user_input(user_question):
-    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
     # Load the FAISS index
-    new_db = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
-    docs = new_db.similarity_search(user_question)
+    vector_store = load_vector_store()
+    if not vector_store:
+        return "The context data is not available. Please upload and process your PDFs again."
+
+    # Perform similarity search
+    docs = vector_store.similarity_search(user_question)
+
     # Get the conversational chain
     chain = get_conversational_chain()
+
     # Generate response
     response = chain({"input_documents": docs, "question": user_question}, return_only_outputs=True)
     return response["output_text"]
@@ -92,10 +109,17 @@ def main():
 
     # User question input and response display
     user_question = st.text_input("Ask a question based on the uploaded PDFs:")
-    if user_question:
-        with st.spinner("Generating response..."):
+    submit_button = st.button("Submit")  # Add a Submit button
+
+    if submit_button and user_question.strip():  # Check if the button is clicked and question is provided
+       with st.spinner("Generating response..."):
             response = handle_user_input(user_question)
             st.write("### Reply:", response)
+       if response == "The context data is not available. Please upload and process your PDFs again.":
+        st.error("No saved context data found. Please upload PDFs and process them first.")
+    elif submit_button and not user_question.strip():  # If button is clicked but no question is entered
+        st.warning("Please enter a question before submitting.")
+
 
 
 if __name__ == "__main__":

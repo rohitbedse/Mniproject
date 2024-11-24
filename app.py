@@ -16,15 +16,32 @@ load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 genai.configure(api_key=GOOGLE_API_KEY)
 
-# Directory to store FAISS indexes
+# Directories for storing data
 INDEX_DIR = "faiss_indexes"
+PDF_UPLOAD_DIR = "uploaded_pdfs"
+
+# Ensure directories exist
+if not os.path.exists(INDEX_DIR):
+    os.makedirs(INDEX_DIR)
+if not os.path.exists(PDF_UPLOAD_DIR):
+    os.makedirs(PDF_UPLOAD_DIR)
 
 
 # Extract text from uploaded PDFs
-def get_pdf_text(pdf_docs):
+def get_pdf_text(pdf_docs, topic):
     text = ""
+    topic_dir = os.path.join(PDF_UPLOAD_DIR, topic)
+    if not os.path.exists(topic_dir):
+        os.makedirs(topic_dir)
+
     for pdf in pdf_docs:
-        pdf_reader = PdfReader(pdf)
+        # Save the PDF locally for persistence
+        pdf_path = os.path.join(topic_dir, pdf.name)
+        with open(pdf_path, "wb") as f:
+            f.write(pdf.getbuffer())
+
+        # Extract text
+        pdf_reader = PdfReader(pdf_path)
         for page in pdf_reader.pages:
             text += page.extract_text()
     return text
@@ -94,10 +111,6 @@ def main():
     st.header("Chat with PDF using Gemini 💁")
     st.write("@rohitbedse_")
 
-    # Ensure the FAISS index directory exists
-    if not os.path.exists(INDEX_DIR):
-        os.makedirs(INDEX_DIR)
-
     # Sidebar for PDF upload and processing
     with st.sidebar:
         st.title("Menu:")
@@ -106,7 +119,7 @@ def main():
         if st.button("Submit & Process"):
             if pdf_docs and topic.strip():
                 with st.spinner("Processing..."):
-                    raw_text = get_pdf_text(pdf_docs)
+                    raw_text = get_pdf_text(pdf_docs, topic.strip())
                     if raw_text.strip():
                         text_chunks = get_text_chunks(raw_text)
                         get_vector_store(topic.strip(), text_chunks)
@@ -122,7 +135,7 @@ def main():
     if topics:
         st.sidebar.markdown("### Topics:")
         for topic in sorted(topics):  # Display topics in alphabetical order
-            st.sidebar.markdown(f"- **{topic}**")
+            st.sidebar.markdown(f"- *{topic}*")
     else:
         st.sidebar.write("No topics available. Please upload PDFs first.")
 
@@ -142,6 +155,6 @@ def main():
         elif not user_question.strip():
             st.warning("Please enter a question.")
 
+
 if __name__ == "__main__":
     main()
-

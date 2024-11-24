@@ -9,11 +9,15 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.chains.question_answering import load_qa_chain
 from langchain.prompts import PromptTemplate
 from dotenv import load_dotenv
+import glob  # For listing FAISS indexes
 
 # Load environment variables
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 genai.configure(api_key=GOOGLE_API_KEY)
+
+# Directory to store FAISS indexes
+INDEX_DIR = "faiss_indexes"
 
 
 # Extract text from uploaded PDFs
@@ -33,22 +37,29 @@ def get_text_chunks(text):
 
 
 # Save FAISS vector store from text chunks
-def get_vector_store(text_chunks):
+def get_vector_store(topic, text_chunks):
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
     vector_store = FAISS.from_texts(text_chunks, embedding=embeddings)
-    vector_store.save_local("faiss_index")  # Saves index.pkl and related files
+    topic_index_path = os.path.join(INDEX_DIR, f"{topic}_faiss_index")
+    vector_store.save_local(topic_index_path)
     return vector_store
 
 
 # Load FAISS vector store
-def load_vector_store():
+def load_vector_store(topic):
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+    topic_index_path = os.path.join(INDEX_DIR, f"{topic}_faiss_index")
     try:
-        # Load the FAISS index
-        vector_store = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
-        return vector_store
+        return FAISS.load_local(topic_index_path, embeddings, allow_dangerous_deserialization=True)
     except FileNotFoundError:
         return None
+
+
+# List all available topics
+def list_available_topics():
+    index_files = glob.glob(os.path.join(INDEX_DIR, "*_faiss_index"))
+    topics = [os.path.basename(file).replace("_faiss_index", "") for file in index_files]
+    return topics
 
 
 # Create a conversational QA chain
@@ -67,60 +78,70 @@ def get_conversational_chain():
 
 
 # Handle user input and generate response
-def handle_user_input(user_question):
-    # Load the FAISS index
-    vector_store = load_vector_store()
+def handle_user_input(topic, user_question):
+    vector_store = load_vector_store(topic)
     if not vector_store:
-        return "The context data is not available. Please upload and process your PDFs again."
-
-    # Perform similarity search
+        return "The context data is not available. Please upload and process your PDFs for this topic."
     docs = vector_store.similarity_search(user_question)
-
-    # Get the conversational chain
     chain = get_conversational_chain()
-
-    # Generate response
     response = chain({"input_documents": docs, "question": user_question}, return_only_outputs=True)
     return response["output_text"]
 
 
 # Streamlit app main function
 def main():
-    st.set_page_config(page_title="Chat PDF", layout="wide")
+    st.set_page_config(page_title="Chat with PDF", layout="wide")
     st.header("Chat with PDF using Gemini 💁")
     st.write("@rohitbedse_")
+
+    # Ensure the FAISS index directory exists
+    if not os.path.exists(INDEX_DIR):
+        os.makedirs(INDEX_DIR)
 
     # Sidebar for PDF upload and processing
     with st.sidebar:
         st.title("Menu:")
+        topic = st.text_input("Enter topic name:")
         pdf_docs = st.file_uploader("Upload your PDF Files", accept_multiple_files=True)
         if st.button("Submit & Process"):
-            if pdf_docs:
+            if pdf_docs and topic.strip():
                 with st.spinner("Processing..."):
                     raw_text = get_pdf_text(pdf_docs)
                     if raw_text.strip():
                         text_chunks = get_text_chunks(raw_text)
-                        get_vector_store(text_chunks)
-                        st.success("Processing complete!")
+                        get_vector_store(topic.strip(), text_chunks)
+                        st.success(f"Processing complete for topic: {topic.strip()}!")
                     else:
                         st.error("Uploaded PDFs are empty or unreadable.")
             else:
-                st.warning("Please upload at least one PDF file.")
+                st.warning("Please enter a topic and upload at least one PDF file.")
+
+    # Sidebar for displaying available topics
+    st.sidebar.title("Available Topics:")
+    topics = list_available_topics()
+    if topics:
+        st.sidebar.markdown("### Topics:")
+        for topic in sorted(topics):  # Display topics in alphabetical order
+            st.sidebar.markdown(f"- **{topic}**")
+    else:
+        st.sidebar.write("No topics available. Please upload PDFs first.")
 
     # User question input and response display
-    user_question = st.text_input("Ask a question based on the uploaded PDFs:")
-    submit_button = st.button("Submit")  # Add a Submit button
+    st.write("### Ask a Question:")
+    selected_topic = st.selectbox("Select a topic:", options=topics)
+    user_question = st.text_input("Enter your question:")
+    submit_button = st.button("Submit")
 
-    if submit_button and user_question.strip():  # Check if the button is clicked and question is provided
-       with st.spinner("Generating response..."):
-            response = handle_user_input(user_question)
-            st.write("### Reply:", response)
-       if response == "The context data is not available. Please upload and process your PDFs again.":
-        st.error("No saved context data found. Please upload PDFs and process them first.")
-    elif submit_button and not user_question.strip():  # If button is clicked but no question is entered
-        st.warning("Please enter a question before submitting.")
-
-
+    if submit_button:
+        if selected_topic and user_question.strip():
+            with st.spinner("Generating response..."):
+                response = handle_user_input(selected_topic, user_question.strip())
+                st.write("### Reply:", response)
+        elif not selected_topic:
+            st.warning("Please select a topic.")
+        elif not user_question.strip():
+            st.warning("Please enter a question.")
 
 if __name__ == "__main__":
     main()
+
